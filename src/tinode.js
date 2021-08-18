@@ -1537,7 +1537,8 @@ Tinode.prototype = {
 
         return ctrl;
       }).catch((err) => {
-        this._connection.reconnect(true);
+        console.log(err);
+        // this._connection.reconnect(true);
 
         if (this.onDisconnect) {
           this.onDisconnect(err);
