@@ -104,20 +104,29 @@ const DB = function(onError, logger) {
         Promise.reject(new Error("not initialized"));
     }
 
+    try {
+      const resKeys = wx.getStorageInfoSync();
+    } catch (e) {
+      console.log(e);
+    }
+
     return new Promise((resolve, reject) => {
-      const trx = db.transaction([source]);
-      trx.onerror = (event) => {
-        logger("PCache", "mapObjects", source, event.target.error);
-        reject(event.target.error);
-      };
-      trx.objectStore(source).getAll().onsuccess = (event) => {
-        if (callback) {
-          event.target.result.forEach((topic) => {
-            callback.call(context, topic);
-          });
+      for (let i in resKeys) {
+        for (let j in source) {
+          if (i.startsWith(j)) {
+            wx.getStorage({
+              key: i,
+              success(res) {
+                callback.call(context, res);
+              },
+              fail(err) {
+                reject(err);
+              },
+            });
+          }
         }
-        resolve(event.target.result);
-      };
+      }
+      resolve(true);
     });
   }
 
@@ -129,47 +138,8 @@ const DB = function(onError, logger) {
     initDatabase: function() {
       return new Promise((resolve, reject) => {
         // Open the database and initialize callbacks.
-        const req = IDBProvider.open(DB_NAME, DB_VERSION);
-        req.onsuccess = (event) => {
-          db = event.target.result;
-          disabled = false;
-          resolve(db);
-        };
-        req.onerror = (event) => {
-          logger("PCache", "failed to initialize", event);
-          reject(event.target.error);
-          onError(event.target.error);
-        };
-        req.onupgradeneeded = function(event) {
-          db = event.target.result;
-
-          db.onerror = function(event) {
-            logger("PCache", "failed to create storage", event);
-            onError(event.target.error);
-          };
-
-          // Individual object stores.
-
-          // Object store (table) for topics. The primary key is topic name.
-          db.createObjectStore('topic', {
-            keyPath: 'name'
-          });
-
-          // Users object store. UID is the primary key.
-          db.createObjectStore('user', {
-            keyPath: 'uid'
-          });
-
-          // Subscriptions object store topic <-> user. Topic name + UID is the primary key.
-          db.createObjectStore('subscription', {
-            keyPath: ['topic', 'uid']
-          });
-
-          // Messages object store. The primary key is topic name + seq.
-          db.createObjectStore('message', {
-            keyPath: ['topic', 'seq']
-          });
-        };
+        db = 'wx-local';
+        disabled = false;
       });
     },
 
@@ -178,21 +148,9 @@ const DB = function(onError, logger) {
      */
     deleteDatabase: function() {
       return new Promise((resolve, reject) => {
-        const req = IDBProvider.deleteDatabase(DB_NAME);
-        req.onblocked = function(event) {
-          if (db) {
-            db.close();
-          }
-        };
-        req.onsuccess = (event) => {
-          db = null;
-          disabled = true;
-          resolve(true);
-        };
-        req.onerror = (event) => {
-          logger("PCache", "deleteDatabase", event.target.error);
-          reject(event.target.error);
-        };
+        wx.clearStorageSync();
+        db = null;
+        disabled = true;
       });
     },
 
@@ -219,19 +177,35 @@ const DB = function(onError, logger) {
           Promise.reject(new Error("not initialized"));
       }
       return new Promise((resolve, reject) => {
-        const trx = db.transaction(['topic'], 'readwrite');
-        trx.oncomplete = (event) => {
-          resolve(event.target.result);
-        };
-        trx.onerror = (event) => {
-          logger("PCache", "updTopic", event.target.error);
-          reject(event.target.error);
-        };
-        const req = trx.objectStore('topic').get(topic.name);
-        req.onsuccess = (event) => {
-          trx.objectStore('topic').put(serializeTopic(req.result, topic));
-          trx.commit();
-        };
+        let _key = 'topic' + '-' + 'topic.name';
+        wx.getStorage({
+          key: _key,
+          success(res) {
+            wx.setStorage({
+              key: _key,
+              value: serializeTopic(res, topic),
+              success(res) {
+                reslove(true);
+              },
+              fail(err) {
+                reject(err);
+              },
+            });
+          },
+          fail(err) {
+            console.log(err);
+            wx.setStorage({
+              key: _key,
+              value: serializeTopic(null, topic),
+              success(res) {
+                reslove(true);
+              },
+              fail(err) {
+                reject(err);
+              },
+            });
+          },
+        })
       });
     },
 
@@ -248,18 +222,19 @@ const DB = function(onError, logger) {
           Promise.reject(new Error("not initialized"));
       }
       return new Promise((resolve, reject) => {
-        const trx = db.transaction(['topic', 'subscription', 'message'], 'readwrite');
-        trx.oncomplete = (event) => {
-          resolve(event.target.result);
-        };
-        trx.onerror = (event) => {
-          logger("PCache", "remTopic", event.target.error);
-          reject(event.target.error);
-        };
-        trx.objectStore('topic').delete(IDBKeyRange.only(name));
-        trx.objectStore('subscription').delete(IDBKeyRange.bound([name, '-'], [name, '~']));
-        trx.objectStore('message').delete(IDBKeyRange.bound([name, 0], [name, Number.MAX_SAFE_INTEGER]));
-        trx.commit();
+        let successFlag = new Array();
+        try {
+          let allKeys = wx.getServerInfoSync();
+          wx.removeStorageSync('topic' + '-' + name);
+          for (let i in allKeys) {
+            if (i.startsWith('subscription' + '-' + name) || i.startsWith('message' + '-' + name)) {
+              wx.removeStorageSync(i);
+            }
+          }
+          resolve(true);
+        } catch (e) {
+          reject(e);
+        }
       });
     },
 
@@ -303,19 +278,19 @@ const DB = function(onError, logger) {
           Promise.reject(new Error("not initialized"));
       }
       return new Promise((resolve, reject) => {
-        const trx = db.transaction(['user'], 'readwrite');
-        trx.oncomplete = (event) => {
-          resolve(event.target.result);
-        };
-        trx.onerror = (event) => {
-          logger("PCache", "updUser", event.target.error);
-          reject(event.target.error);
-        };
-        trx.objectStore('user').put({
-          uid: uid,
-          public: pub
-        });
-        trx.commit();
+        wx.setStorage({
+          key: 'user' + '-' + uid,
+          value: {
+            uid: uid,
+            public: pub
+          },
+          success(res) {
+            resolve(true);
+          },
+          fail(err) {
+            reject(err);
+          }
+        })
       });
     },
 
@@ -332,16 +307,15 @@ const DB = function(onError, logger) {
           Promise.reject(new Error("not initialized"));
       }
       return new Promise((resolve, reject) => {
-        const trx = db.transaction(['user'], 'readwrite');
-        trx.oncomplete = (event) => {
-          resolve(event.target.result);
-        };
-        trx.onerror = (event) => {
-          logger("PCache", "remUser", event.target.error);
-          reject(event.target.error);
-        };
-        trx.objectStore('user').delete(IDBKeyRange.only(uid));
-        trx.commit();
+        wx.removeStorage({
+          key: 'user' + '-' + uid,
+          success(res) {
+            resolve(res);
+          },
+          fail(err) {
+            reject(err);
+          }
+        });
       });
     },
 
@@ -369,19 +343,15 @@ const DB = function(onError, logger) {
           Promise.reject(new Error("not initialized"));
       }
       return new Promise((resolve, reject) => {
-        const trx = db.transaction(['user']);
-        trx.oncomplete = (event) => {
-          const user = event.target.result;
-          resolve({
-            user: user.uid,
-            public: user.public
-          });
-        };
-        trx.onerror = (event) => {
-          logger("PCache", "getUser", event.target.error);
-          reject(event.target.error);
-        };
-        trx.objectStore('user').get(uid);
+        wx.getStorage({
+          key: 'user' + '-' + uid,
+          success(res) {
+            resolve(res);
+          },
+          fail(err) {
+            reject(err);
+          }
+        });
       });
     },
 
@@ -402,18 +372,22 @@ const DB = function(onError, logger) {
           Promise.reject(new Error("not initialized"));
       }
       return new Promise((resolve, reject) => {
-        const trx = db.transaction(['subscription'], 'readwrite');
-        trx.oncomplete = (event) => {
-          resolve(event.target.result);
-        };
-        trx.onerror = (event) => {
-          logger("PCache", "updSubscription", event.target.error);
-          reject(event.target.error);
-        };
-        trx.objectStore('subscription').get([topicName, uid]).onsuccess = (event) => {
-          trx.objectStore('subscription').put(serializeSubscription(event.target.result, topicName, uid, sub));
-          trx.commit();
-        };
+        let _res = null;
+        try {
+          _res = wx.getStorageSync('subscription' + '-' + topicName + '-' + uid);
+        } catch (e) {
+
+        }
+        wx.setStorage({
+          key: 'subscription' + '-' + topicName + '-' + uid,
+          value: serializeSubscription(_res, topicName, uid, sub),
+          success(res) {
+            resolve(res);
+          },
+          fail(err) {
+            reject(err);
+          }
+        });
       });
     },
 
@@ -431,20 +405,33 @@ const DB = function(onError, logger) {
           Promise.resolve([]) :
           Promise.reject(new Error("not initialized"));
       }
+
+      const resKeys = null;
+      try {
+        resKeys = wx.getStorageInfoSync();
+      } catch (e) {
+        // Do something when catch error
+      }
+
       return new Promise((resolve, reject) => {
-        const trx = db.transaction(['subscription']);
-        trx.onerror = (event) => {
-          logger("PCache", "mapSubscriptions", event.target.error);
-          reject(event.target.error);
-        };
-        trx.objectStore('subscription').getAll(IDBKeyRange.bound([topicName, '-'], [topicName, '~'])).onsuccess = (event) => {
-          if (callback) {
-            event.target.result.forEach((topic) => {
-              callback.call(context, topic);
-            });
+        let _result = new Array();
+        for (let i in resKeys) {
+          if (i.startsWith('subscription' + '-' + topicName)) {
+            if (callback) {
+              wx.getStorage({
+                key: i,
+                success(res) {
+                  callback.call(context, res);
+                  _result.push(res);
+                },
+                fail(err) {
+                  reject(err);
+                }
+              });
+            }
           }
-          resolve(event.target.result);
-        };
+          resolve(_result);
+        }
       });
     },
 
@@ -464,16 +451,23 @@ const DB = function(onError, logger) {
           Promise.reject(new Error("not initialized"));
       }
       return new Promise((resolve, reject) => {
-        const trx = db.transaction(['message'], 'readwrite');
-        trx.onsuccess = (event) => {
-          resolve(event.target.result);
-        };
-        trx.onerror = (event) => {
-          logger("PCache", "addMesssage", event.target.error);
-          reject(event.target.error);
-        };
-        trx.objectStore('message').add(serializeMessage(null, msg));
-        trx.commit();
+        var _allMessage = new Array();
+        try {
+          _allMessage = wx.getStorageSync('message' + '-' + msg.topic);
+        } catch (e) {
+
+        }
+        _allMessage.push(serializeMessage(null, msg));
+        wx.setStorage({
+          key: 'message' + '-' + msg.topic,
+          value: _allMessage,
+          success(res) {
+            resolve(res);
+          },
+          fail(err) {
+            reject(err);
+          }
+        });
       });
     },
 
@@ -492,28 +486,37 @@ const DB = function(onError, logger) {
           Promise.reject(new Error("not initialized"));
       }
       return new Promise((resolve, reject) => {
-        const trx = db.transaction(['message'], 'readwrite');
-        trx.onsuccess = (event) => {
-          resolve(event.target.result);
-        };
-        trx.onerror = (event) => {
-          logger("PCache", "updMessageStatus", event.target.error);
-          reject(event.target.error);
-        };
-        const req = trx.objectStore('message').get(IDBKeyRange.only([topicName, seq]));
-        req.onsuccess = (event) => {
-          const src = req.result || event.target.result;
-          if (!src || src._status == status) {
-            trx.commit();
-            return;
+        var _message = null;
+        try {
+          let _allMessage = wx.getStorageSync('message' + '-' + topicName);
+          for (let i in _allMessage) {
+            if (i.seq === seq) {
+              _message = i;
+              break;
+            }
           }
-          trx.objectStore('message').put(serializeMessage(src, {
-            topic: topicName,
-            seq: seq,
-            _status: status
-          }));
-          trx.commit();
-        };
+        } catch (e) {
+
+        }
+
+        if (_message === null) {
+          resolve(true);
+        } else {
+          wx.setStorage({
+            key: 'messages' + '-' + topicName,
+            values: serializeMessage(src, {
+              topic: topicName,
+              seq: seq,
+              _status: status
+            }),
+            success(res) {
+              resolve(res);
+            },
+            fail(err) {
+              reject(err);
+            }
+          });
+        }
       });
     },
 
@@ -536,18 +539,35 @@ const DB = function(onError, logger) {
           from = 0;
           to = Number.MAX_SAFE_INTEGER;
         }
-        const range = to > 0 ? IDBKeyRange.bound([topicName, from], [topicName, to], false, true) :
-          IDBKeyRange.only([topicName, from]);
-        const trx = db.transaction(['message'], 'readwrite');
-        trx.onsuccess = (event) => {
-          resolve(event.target.result);
-        };
-        trx.onerror = (event) => {
-          logger("PCache", "remMessages", event.target.error);
-          reject(event.target.error);
-        };
-        trx.objectStore('message').delete(range);
-        trx.commit();
+
+        if (to > 0) {
+          wx.removeStorage({
+            key: 'message' + '-' + topicName,
+            success(res) {
+              resolve(res);
+            },
+            fail(err) {
+              reject(err);
+            },
+          });
+        } else {
+          var _allMessage = null;
+          try {
+            let _allMessage = wx.getStorageSync('message' + '-' + topicName);
+          } catch (e) {
+            reject(Error('Dont have message'));
+          }
+          wx.setStorage({
+            key: 'message' + '-' + topicName,
+            value: _allMessage.filter((x) => x.seq !== from),
+            success(res) {
+              resolve(res);
+            },
+            fail(err) {
+              reject(err);
+            }
+          });
+        }
       });
     },
 
@@ -575,29 +595,23 @@ const DB = function(onError, logger) {
         const limit = query.limit | 0;
 
         const result = [];
-        const range = IDBKeyRange.bound([topicName, from], [topicName, to], false, true);
-        const trx = db.transaction(['message']);
-        trx.onerror = (event) => {
-          logger("PCache", "readMessages", event.target.error);
-          reject(event.target.error);
-        };
-        // Iterate in descending order.
-        trx.objectStore('message').openCursor(range, 'prev').onsuccess = (event) => {
-          const cursor = event.target.result;
-          if (cursor) {
-            if (callback) {
-              callback.call(context, cursor.value);
+        wx.getStorage({
+          value: 'message' + '-' + topicName,
+          success(res) {
+            for (let i in res.reverse()) {
+              if (callback) {
+                callback.call(context, res);
+              }
+              result.push(i);
+              if (limit <= 0 || result.length < limit) {
+
+              } else {
+                resolve(result);
+              }
             }
-            result.push(cursor.value);
-            if (limit <= 0 || result.length < limit) {
-              cursor.continue();
-            } else {
-              resolve(result);
-            }
-          } else {
-            resolve(result);
+            resolve(result)
           }
-        };
+        });
       });
     }
   };

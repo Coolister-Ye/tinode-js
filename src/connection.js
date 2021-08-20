@@ -161,12 +161,12 @@ const Connection = function(config, version_, autoreconnect_) {
         // It throws when the server is not accessible but the exception cannot be caught:
         // https://stackoverflow.com/questions/31002592/javascript-doesnt-catch-error-in-websocket-instantiation/31003057
         const conn = wx.connectSocket({
-          url
+          url: url
         });
 
-        conn.onerror = function(err) {
+        conn.onError(function(err) {
           reject(err);
-        }
+        })
 
         conn.onOpen(function(evt) {
           if (autoreconnect) {
@@ -177,10 +177,10 @@ const Connection = function(config, version_, autoreconnect_) {
             instance.onOpen();
           }
 
-          // resolve();
+          resolve();
         })
 
-        conn.onclose = function(evt) {
+        conn.onClose(function(evt) {
           _socket = null;
 
           if (instance.onDisconnect) {
@@ -192,13 +192,14 @@ const Connection = function(config, version_, autoreconnect_) {
           if (!_boffClosed && autoreconnect) {
             boffReconnect.call(instance);
           }
-        }
+        })
 
-        conn.onmessage = function(evt) {
+        conn.onMessage(function(evt) {
           if (instance.onMessage) {
             instance.onMessage(evt.data);
           }
-        }
+        })
+
         _socket = conn;
       });
     }
@@ -238,7 +239,9 @@ const Connection = function(config, version_, autoreconnect_) {
      */
     instance.sendText = function(msg) {
       if (_socket && (_socket.readyState == _socket.OPEN)) {
-        _socket.send(msg);
+        _socket.send({
+          data: msg
+        });
       } else {
         throw new Error("Websocket is not connected");
       }

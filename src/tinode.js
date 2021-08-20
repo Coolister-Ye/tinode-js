@@ -79,6 +79,7 @@ if (typeof indexedDB != 'undefined') {
 }
 
 initForNonBrowserApp();
+console.log(global);
 
 // Global constants
 const PROTOCOL_VERSION = '0'; // Major component of the version, e.g. '0' in '0.17.1'.
@@ -218,7 +219,7 @@ function b64EncodeUnicode(str) {
   // The encodeURIComponent percent-encodes UTF-8 string,
   // then the percent encoding is converted into raw bytes which
   // can be fed into btoa.
-  return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g,
+  return global.btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g,
     function toSolidBytes(match, p1) {
       return String.fromCharCode('0x' + p1);
     }));
